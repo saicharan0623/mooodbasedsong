@@ -1,0 +1,9 @@
+streamlit
+spotipy
+deepface
+opencv-python-headless
+streamlit-webrtc
+av
+numpy
+pandas
+matplotlib
