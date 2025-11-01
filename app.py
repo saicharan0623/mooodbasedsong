@@ -24,8 +24,30 @@ try:
     CLIENT_ID = st.secrets['spotify']['client_id']
     CLIENT_SECRET = st.secrets['spotify']['client_secret']
     REDIRECT_URI = st.secrets['spotify']['redirect_uri']
+    
+    # Display connection info for debugging
+    if st.sidebar.checkbox("Show Debug Info", value=False):
+        st.sidebar.write(f"**Redirect URI:** {REDIRECT_URI}")
+        st.sidebar.write(f"**Client ID:** {CLIENT_ID[:10]}...")
+        
 except (FileNotFoundError, KeyError) as e:
-    st.error("Spotify credentials not found in `secrets.toml`. Please configure them.")
+    st.error("⚠️ Spotify credentials not found in Streamlit secrets.")
+    st.info("""
+    **Setup Instructions:**
+    
+    1. Go to your app settings in Streamlit Cloud
+    2. Navigate to the Secrets section
+    3. Add the following:
+    
+    ```toml
+    [spotify]
+    client_id = "your_spotify_client_id"
+    client_secret = "your_spotify_client_secret"
+    redirect_uri = "https://mooodbasedsong.streamlit.app"
+    ```
+    
+    4. Make sure the redirect_uri matches what's in your Spotify Dashboard
+    """)
     st.stop()
 
 # Define the required scopes for Spotify
@@ -333,7 +355,12 @@ def main_app():
                     # Show all emotions
                     with st.expander("See all emotion scores"):
                         for emo, score in sorted(emotion_data['all_emotions'].items(), key=lambda x: x[1], reverse=True):
-                            st.progress(score, text=f"{emo.capitalize()}: {score:.1%}")
+                            col_emo, col_bar = st.columns([1, 3])
+                            with col_emo:
+                                st.write(f"**{emo.capitalize()}**")
+                            with col_bar:
+                                st.progress(score)
+                                st.caption(f"{score:.1%}")
                     
                     # Update music if emotion changed significantly
                     if detected_emotion != st.session_state.current_emotion:
