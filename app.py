@@ -295,17 +295,26 @@ def update_music_for_emotion(emotion):
         if not sp:
             return
 
-        tracks = st.session_state.spotify_auth.get_recommendations_for_emotion(sp, emotion)
+        with st.spinner(f"Finding {emotion} music..."):
+            tracks = st.session_state.spotify_auth.get_recommendations_for_emotion(sp, emotion)
         
         if tracks:
             selected_track = random.choice(tracks)
             track_uri = selected_track['uri']
             
+            # Try to play the track
             success = st.session_state.spotify_auth.play_track(sp, track_uri)
             
+            # Store the song regardless of playback success (for display)
+            st.session_state.current_song = selected_track
+            
             if success:
-                st.session_state.current_song = selected_track
                 st.success(f"🎵 Now playing: {selected_track['name']} by {selected_track['artists'][0]['name']}")
+            else:
+                st.info(f"💿 Song selected: {selected_track['name']} by {selected_track['artists'][0]['name']}")
+                st.warning("⚠️ Could not play automatically. Please open Spotify on any device and press play!")
+        else:
+            st.warning("Could not get song recommendations. Please try again.")
                 
     except Exception as e:
         st.error(f"Error updating music: {e}")
@@ -367,11 +376,12 @@ def main_app():
                         st.session_state.current_emotion = detected_emotion
                         st.session_state.last_emotion_change = current_time
                         
-                        # Log the emotion
+                        # Update music first
+                        update_music_for_emotion(detected_emotion)
+                        
+                        # Log the emotion with the new song
                         st.session_state.mood_tracker.log_emotion(emotion_data, st.session_state.current_song)
                         
-                        # Update music
-                        update_music_for_emotion(detected_emotion)
                         st.rerun()
                 else:
                     st.warning("Could not detect emotion clearly. Please try again with better lighting.")
@@ -394,7 +404,14 @@ def main_app():
             if 'external_urls' in track:
                 st.link_button("🎧 Open in Spotify", track['external_urls']['spotify'])
         else:
-            st.info("No song playing yet. Take a photo to detect your mood and get music recommendations!")
+            st.info("No song playing yet. Take a photo to detect your mood!")
+            
+            # Add manual recommendation button
+            if st.button("🎲 Get Random Recommendations"):
+                update_music_for_emotion(st.session_state.current_emotion)
+                st.rerun()
+            
+            st.caption("💡 Make sure Spotify is open on one of your devices!")
     
     # Mood History Section
     st.markdown("---")
