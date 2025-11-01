@@ -215,59 +215,77 @@ class SpotifyClient:
         return self.available_genres
 
     def get_recommendations_for_emotion(self, sp, emotion):
+        """Get song recommendations based on detected emotion"""
         if emotion not in SPOTIFY_MOOD_MAP:
             emotion = 'neutral'
         
-        # Load available genres
-        available_genres = self.load_available_genres(sp)
-        
-        params = SPOTIFY_MOOD_MAP[emotion]
-        
         try:
-            # Build recommendation parameters
-            rec_params = {'limit': 10}
+            # Strategy 1: Use user's top tracks as seeds (most reliable)
+            st.info(f"Finding {emotion} music for you...")
             
-            # Filter seed genres to only valid ones
-            requested_genres = params.get('seed_genres', ['pop'])[:5]
-            valid_genres = [g for g in requested_genres if g in available_genres]
+            top_tracks = sp.current_user_top_tracks(limit=5, time_range='medium_term')
             
-            # Ensure we have at least one genre
-            if not valid_genres:
-                valid_genres = ['pop'] if 'pop' in available_genres else [available_genres[0]]
+            if top_tracks and top_tracks.get('items'):
+                track_ids = [track['id'] for track in top_tracks['items'][:5]]
+                
+                params = SPOTIFY_MOOD_MAP[emotion]
+                rec_params = {
+                    'seed_tracks': track_ids,
+                    'limit': 10
+                }
+                
+                # Add target values instead of min/max
+                if 'min_valence' in params:
+                    rec_params['target_valence'] = params['min_valence']
+                elif 'max_valence' in params:
+                    rec_params['target_valence'] = params['max_valence']
+                    
+                if 'min_energy' in params:
+                    rec_params['target_energy'] = params['min_energy']
+                elif 'max_energy' in params:
+                    rec_params['target_energy'] = params['max_energy']
+                
+                recs = sp.recommendations(**rec_params)
+                
+                if recs and recs.get('tracks'):
+                    st.success(f"Found {len(recs['tracks'])} songs!")
+                    return recs['tracks']
             
-            rec_params['seed_genres'] = valid_genres
+            # Strategy 2: Use top artists as seeds
+            st.info("Trying alternative search method...")
+            top_artists = sp.current_user_top_artists(limit=5, time_range='medium_term')
             
-            # Add audio feature filters
-            if 'min_valence' in params and params['min_valence'] is not None:
-                rec_params['min_valence'] = params['min_valence']
-            if 'max_valence' in params and params['max_valence'] is not None:
-                rec_params['max_valence'] = params['max_valence']
-            if 'min_energy' in params and params['min_energy'] is not None:
-                rec_params['min_energy'] = params['min_energy']
-            if 'max_energy' in params and params['max_energy'] is not None:
-                rec_params['max_energy'] = params['max_energy']
+            if top_artists and top_artists.get('items'):
+                artist_ids = [artist['id'] for artist in top_artists['items'][:5]]
+                
+                recs = sp.recommendations(seed_artists=artist_ids, limit=10)
+                
+                if recs and recs.get('tracks'):
+                    return recs['tracks']
             
-            # Make the API call
-            recs = sp.recommendations(**rec_params)
+            # Strategy 3: Use popular tracks from a specific genre-related artist
+            st.info("Searching popular tracks...")
+            # Mood-based artist search
+            mood_search_terms = {
+                'happy': 'happy pop',
+                'sad': 'sad acoustic',
+                'angry': 'rock metal',
+                'fear': 'ambient',
+                'surprise': 'electronic dance',
+                'disgust': 'jazz',
+                'neutral': 'indie pop'
+            }
             
-            if recs and 'tracks' in recs and len(recs['tracks']) > 0:
-                return recs['tracks']
-            else:
-                # Fallback: try with just one genre
-                recs = sp.recommendations(seed_genres=['pop'], limit=10)
-                return recs['tracks'] if recs else None
+            search_term = mood_search_terms.get(emotion, 'pop')
+            search_results = sp.search(q=search_term, type='track', limit=10)
+            
+            if search_results and search_results.get('tracks', {}).get('items'):
+                return search_results['tracks']['items']
                 
         except Exception as e:
             st.error(f"Error getting recommendations: {str(e)}")
-            # Last resort fallback using user's top tracks
-            try:
-                top_tracks = sp.current_user_top_tracks(limit=5, time_range='short_term')
-                if top_tracks and top_tracks['items']:
-                    track_ids = [track['id'] for track in top_tracks['items'][:5]]
-                    recs = sp.recommendations(seed_tracks=track_ids, limit=10)
-                    return recs['tracks'] if recs else None
-            except:
-                return None
+        
+        return None
 
     def play_track(self, sp, track_uri):
         try:
