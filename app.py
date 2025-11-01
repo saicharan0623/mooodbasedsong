@@ -203,15 +203,24 @@ class SpotifyClient:
         params = SPOTIFY_MOOD_MAP[emotion]
         
         try:
+            # Get available genres to validate our seeds
+            available_genres = sp.recommendation_genre_seeds()['genres']
+            
             # Build recommendation parameters
             rec_params = {
                 'limit': 10
             }
             
-            # Add seed genres (max 5)
+            # Add seed genres (max 5) - make sure they're in the list format
             genres = params.get('seed_genres', [])[:5]
-            if genres:
-                rec_params['seed_genres'] = genres
+            # Filter to only use available genres
+            valid_genres = [g for g in genres if g in available_genres]
+            
+            if valid_genres:
+                rec_params['seed_genres'] = valid_genres
+            else:
+                # Fallback to popular genres if none are valid
+                rec_params['seed_genres'] = ['pop', 'rock']
             
             # Add audio feature filters
             if 'min_valence' in params:
@@ -227,7 +236,12 @@ class SpotifyClient:
             return recs['tracks']
         except Exception as e:
             st.warning(f"Could not get recommendations: {e}")
-            return None
+            # Try a simpler request without genre filtering
+            try:
+                recs = sp.recommendations(seed_genres=['pop'], limit=10)
+                return recs['tracks']
+            except:
+                return None
 
     def play_track(self, sp, track_uri):
         try:
@@ -436,7 +450,7 @@ def main_app():
         col_data, col_chart = st.columns([2, 1])
         
         with col_data:
-            st.dataframe(df.tail(10), use_container_width=True)
+            st.dataframe(df.tail(10), width='stretch')
         
         with col_chart:
             if len(df) > 0:
