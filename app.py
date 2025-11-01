@@ -31,11 +31,9 @@ except KeyError:
 
 
 # Define the required scopes for Spotify
-# We need to control playback and read user's playback state
 SCOPES = "user-modify-playback-state user-read-playback-state user-read-currently-playing"
 
 # Map emotions to Spotify audio features
-# This is more effective than just searching for "happy songs"
 SPOTIFY_MOOD_MAP = {
     'happy': {'min_valence': 0.7, 'min_energy': 0.7, 'seed_genres': ['happy', 'dance', 'pop']},
     'sad': {'max_valence': 0.3, 'max_energy': 0.4, 'seed_genres': ['sad', 'acoustic', 'blues']},
@@ -50,7 +48,7 @@ SPOTIFY_MOOD_MAP = {
 os.makedirs('data', exist_ok=True)
 
 # -------------------------------------------------------------------
-# 2. Emotion Detector Class (From your notebook, slightly adapted)
+# 2. Emotion Detector Class
 # -------------------------------------------------------------------
 
 class EmotionDetector:
@@ -82,7 +80,6 @@ class EmotionDetector:
                 'timestamp': datetime.now().isoformat()
             }
         except Exception as e:
-            # st.error(f"Error in DeepFace: {e}")
             return None
 
     def draw_emotion_on_frame(self, frame, emotion_data):
@@ -98,7 +95,6 @@ class EmotionDetector:
             emoji = emoji_map.get(emotion, '🙂')
             text = f"{emoji} {emotion.upper()} ({confidence:.2f})"
             
-            # Draw text background
             cv2.rectangle(frame_copy, (10, 10), (400, 60), (0, 0, 0), -1)
             cv2.putText(
                 frame_copy, text, (20, 45),
@@ -107,7 +103,7 @@ class EmotionDetector:
         return frame_copy
 
 # -------------------------------------------------------------------
-# 3. Mood Tracker Class (From your notebook, adapted for Streamlit)
+# 3. Mood Tracker Class
 # -------------------------------------------------------------------
 
 class MoodTracker:
@@ -137,7 +133,7 @@ class MoodTracker:
         return pd.DataFrame(self.mood_data)
 
 # -------------------------------------------------------------------
-# 4. Spotify Client Class (Replaces YouTubeMusicPlayer)
+# 4. Spotify Client Class
 # -------------------------------------------------------------------
 
 class SpotifyClient:
@@ -147,7 +143,7 @@ class SpotifyClient:
             client_secret=CLIENT_SECRET,
             redirect_uri=REDIRECT_URI,
             scope=SCOPES,
-            cache_path=None  # We will manage tokens in session state
+            cache_path=None
         )
 
     def get_auth_url(self):
@@ -166,7 +162,7 @@ class SpotifyClient:
 
     def get_recommendations_for_emotion(self, sp, emotion):
         if emotion not in SPOTIFY_MOOD_MAP:
-            emotion = 'neutral' # Default
+            emotion = 'neutral'
         
         params = SPOTIFY_MOOD_MAP[emotion]
         
@@ -177,7 +173,7 @@ class SpotifyClient:
                 max_valence=params.get('max_valence'),
                 min_energy=params.get('min_energy'),
                 max_energy=params.get('max_energy'),
-                limit=10 # Get 10 recommendations
+                limit=10
             )
             return recs['tracks']
         except Exception as e:
@@ -186,13 +182,11 @@ class SpotifyClient:
 
     def play_track(self, sp, track_uri):
         try:
-            # Check for active devices
             devices = sp.devices()
             if not devices['devices']:
                 st.warning("No active Spotify device found. Please open Spotify on one of your devices and start playing.")
                 return False
             
-            # Play the track on the active device
             sp.start_playback(uris=[track_uri])
             st.success("Playing song on your active Spotify device!")
             return True
@@ -233,20 +227,17 @@ def initialize_session_state():
 def handle_spotify_auth():
     """Manages the Spotify OAuth login and token retrieval."""
     
-    # Check if we got a code back in the URL query parameters
     query_params = st.query_params
     if "code" in query_params and not st.session_state.token_info:
         st.session_state.auth_code = query_params["code"][0]
-        st.query_params.clear() # Clear code from URL
+        st.query_params.clear() 
 
-        # Exchange code for token
         token_info = st.session_state.spotify_auth.get_token(st.session_state.auth_code)
         if token_info:
             st.session_state.token_info = token_info
             st.session_state.sp_client = st.session_state.spotify_auth.get_spotify_client(token_info)
-            st.rerun() # Rerun to show the main app
+            st.rerun()
 
-    # If not logged in, show login button
     if not st.session_state.sp_client:
         st.header("Login to Spotify to Begin")
         auth_url = st.session_state.spotify_auth.get_auth_url()
@@ -260,14 +251,12 @@ def main_app():
     
     st.header(f"Current Mood: {st.session_state.current_emotion.capitalize()}")
     
-    # Placeholder for the webcam feed and song info
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.subheader("Webcam Feed")
         webcam_placeholder = st.empty()
         
-        # Start/Stop button
         if st.button("Start/Stop Webcam"):
             st.session_state.run_webcam = not st.session_state.run_webcam
             
@@ -294,7 +283,6 @@ def main_app():
         else:
             song_placeholder.info("No song selected yet. Start the webcam to detect your mood!")
     
-    # Mood Dashboard
     st.subheader("Mood History")
     df = st.session_state.mood_tracker.get_mood_df()
     if not df.empty:
@@ -307,9 +295,8 @@ def main_app():
     else:
         st.info("No mood data logged yet.")
 
-
 # -------------------------------------------------------------------
-# 6. Webcam Video Transformer (The core of streamlit-webrtc)
+# 6. Webcam Video Transformer
 # -------------------------------------------------------------------
 
 class EmotionVideoTransformer(VideoTransformerBase):
@@ -321,11 +308,10 @@ class EmotionVideoTransformer(VideoTransformerBase):
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
         
-        # Process every N seconds to save resources
         current_time = time.time()
         emotion_data = None
         
-        if current_time - self.last_frame_time > 2: # Analyze every 2 seconds
+        if current_time - self.last_frame_time > 2: 
             self.last_frame_time = current_time
             
             emotion_data = self.emotion_detector.detect_emotion_from_frame(img)
@@ -334,26 +320,21 @@ class EmotionVideoTransformer(VideoTransformerBase):
                 detected_emotion = emotion_data['emotion']
                 self.last_emotion = detected_emotion
                 
-                # Check if emotion changed and enough time has passed
                 time_since_last_change = time.time() - st.session_state.last_emotion_change
                 
                 if (detected_emotion != st.session_state.current_emotion and 
-                    time_since_last_change > 10): # Wait 10s before changing
+                    time_since_last_change > 10): 
                     
                     st.session_state.current_emotion = detected_emotion
                     st.session_state.last_emotion_change = time.time()
                     
-                    # This is a bit of a hack to run Spotify logic from a thread
-                    # A more robust solution would use a separate queue
                     self.update_music(detected_emotion, emotion_data)
         
-        # Draw emotion on frame
         frame_with_emotion = self.emotion_detector.draw_emotion_on_frame(img, emotion_data)
         
         return av.VideoFrame.from_ndarray(frame_with_emotion, format="bgr24")
 
     def update_music(self, emotion, emotion_data):
-        """Finds and plays music. Called from the transformer thread."""
         try:
             sp = st.session_state.sp_client
             if not sp:
@@ -365,25 +346,46 @@ class EmotionVideoTransformer(VideoTransformerBase):
                 selected_track = random.choice(tracks)
                 track_uri = selected_track['uri']
                 
-                # Play the track
                 st.session_state.spotify_auth.play_track(sp, track_uri)
                 
-                # Log and update state
                 st.session_state.current_song = selected_track
                 st.session_state.mood_tracker.log_emotion(emotion_data, selected_track)
                 
         except Exception as e:
-            # We are in a thread, so we can't use st.error
             print(f"Error in update_music thread: {e}")
 
+# -------------------------------------------------------------------
+# 7. Model Pre-loader
+# -------------------------------------------------------------------
+
+@st.cache_resource
+def load_models():
+    """
+    Downloads and caches the DeepFace models on first run.
+    """
+    # Use a small dummy image to trigger the model download
+    dummy_img = np.zeros((96, 96, 3), dtype=np.uint8)
+    try:
+        # This will download the emotion model
+        DeepFace.analyze(dummy_img, actions=['emotion'], enforce_detection=False)
+    except Exception as e:
+        # This might fail if no face is found (which is fine)
+        # We are just interested in triggering the download.
+        print(f"Pre-load complete (ignoring analyze error: {e})")
+    
+    print("Models are loaded and cached.")
+    return True
 
 # -------------------------------------------------------------------
-# 7. Main Execution
+# 8. Main Execution
 # -------------------------------------------------------------------
 
 if __name__ == "__main__":
     st.set_page_config(page_title="Mood Music Player", layout="wide")
     st.title("🎵 Emotion-Based Spotify Player")
+    
+    with st.spinner("Warming up the AI models... This may take a few minutes on first load."):
+        load_models()
     
     # Initialize session state
     initialize_session_state()
