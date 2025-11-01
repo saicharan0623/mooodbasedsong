@@ -4,539 +4,204 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
-import os
-import time
+import os, time, random
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-import random
 from PIL import Image
 
-# Suppress TensorFlow warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-
 # -------------------------------------------------------------------
-# 1. Configuration & Setup
+# 1️⃣ CONFIGURATION
 # -------------------------------------------------------------------
+st.set_page_config(page_title="Mood Music Player", page_icon="🎵", layout="wide")
 
 # Load Spotify credentials from Streamlit secrets
 try:
-    CLIENT_ID = st.secrets['spotify']['client_id']
-    CLIENT_SECRET = st.secrets['spotify']['client_secret']
-    REDIRECT_URI = st.secrets['spotify']['redirect_uri']
-    
-    # Display connection info for debugging
-    if st.sidebar.checkbox("Show Debug Info", value=False):
-        st.sidebar.write(f"**Redirect URI:** {REDIRECT_URI}")
-        st.sidebar.write(f"**Client ID:** {CLIENT_ID[:10]}...")
-        
-except (FileNotFoundError, KeyError) as e:
-    st.error("⚠️ Spotify credentials not found in Streamlit secrets.")
-    st.info("""
-    **Setup Instructions:**
-    
-    1. Go to your app settings in Streamlit Cloud
-    2. Navigate to the Secrets section
-    3. Add the following:
-    
-    ```toml
-    [spotify]
-    client_id = "your_spotify_client_id"
-    client_secret = "your_spotify_client_secret"
-    redirect_uri = "https://mooodbasedsong.streamlit.app"
-    ```
-    
-    4. Make sure the redirect_uri matches what's in your Spotify Dashboard
-    """)
+    CLIENT_ID = st.secrets["spotify"]["client_id"]
+    CLIENT_SECRET = st.secrets["spotify"]["client_secret"]
+    REDIRECT_URI = st.secrets["spotify"]["redirect_uri"]
+except Exception:
+    st.error("⚠️ Missing Spotify credentials. Add them in Streamlit Secrets.")
     st.stop()
 
-# Define the required scopes for Spotify
-SCOPES = "user-modify-playback-state user-read-playback-state user-read-currently-playing user-top-read"
+SCOPES = "user-read-currently-playing user-read-playback-state user-top-read user-modify-playback-state"
 
-# Map emotions to Spotify audio features
-# Using only verified Spotify genres that are known to work
 SPOTIFY_MOOD_MAP = {
-    'happy': {'min_valence': 0.7, 'min_energy': 0.7, 'seed_genres': ['pop', 'dance', 'happy']},
-    'sad': {'max_valence': 0.3, 'max_energy': 0.4, 'seed_genres': ['sad', 'acoustic', 'piano']},
-    'angry': {'max_valence': 0.4, 'min_energy': 0.8, 'seed_genres': ['metal', 'rock', 'hard-rock']},
-    'fear': {'max_energy': 0.4, 'max_valence': 0.4, 'seed_genres': ['ambient', 'chill', 'sleep']},
-    'surprise': {'min_energy': 0.7, 'min_valence': 0.6, 'seed_genres': ['pop', 'edm', 'party']},
-    'disgust': {'max_energy': 0.3, 'seed_genres': ['jazz', 'soul', 'blues']},
-    'neutral': {'min_valence': 0.4, 'max_valence': 0.6, 'seed_genres': ['indie', 'pop', 'chill']}
+    "happy": {"energy": 0.8, "valence": 0.8, "genres": ["pop", "dance", "happy"]},
+    "sad": {"energy": 0.3, "valence": 0.2, "genres": ["acoustic", "piano", "sad"]},
+    "angry": {"energy": 0.9, "valence": 0.3, "genres": ["rock", "metal", "hard-rock"]},
+    "fear": {"energy": 0.4, "valence": 0.3, "genres": ["ambient", "chill", "sleep"]},
+    "surprise": {"energy": 0.7, "valence": 0.7, "genres": ["edm", "party", "pop"]},
+    "disgust": {"energy": 0.4, "valence": 0.3, "genres": ["jazz", "soul", "blues"]},
+    "neutral": {"energy": 0.5, "valence": 0.5, "genres": ["indie", "pop", "chill"]},
 }
 
-# Emoji map for emotions
 EMOJI_MAP = {
-    'happy': '😊', 'sad': '😢', 'angry': '😠',
-    'fear': '😨', 'surprise': '😲', 'disgust': '🤢',
-    'neutral': '😐'
+    "happy": "😊", "sad": "😢", "angry": "😠",
+    "fear": "😨", "surprise": "😲", "disgust": "🤢", "neutral": "😐"
 }
 
-# Create data directory
-os.makedirs('data', exist_ok=True)
+os.makedirs("data", exist_ok=True)
 
 # -------------------------------------------------------------------
-# 2. Load DeepFace with Error Handling
+# 2️⃣ LOAD DEEPFACE
 # -------------------------------------------------------------------
-
 @st.cache_resource
 def load_deepface():
-    """Load DeepFace model safely"""
+    from deepface import DeepFace
+    dummy = np.zeros((224, 224, 3), dtype=np.uint8)
     try:
-        from deepface import DeepFace
-        # Pre-warm the model with a dummy image
-        dummy = np.zeros((224, 224, 3), dtype=np.uint8)
-        try:
-            DeepFace.analyze(dummy, actions=['emotion'], enforce_detection=False, silent=True)
-        except:
-            pass  # Expected to fail, just warming up
-        return DeepFace
-    except Exception as e:
-        st.error(f"Failed to load DeepFace: {e}")
-        return None
+        DeepFace.analyze(dummy, actions=["emotion"], enforce_detection=False, silent=True)
+    except Exception:
+        pass
+    return DeepFace
+
+DeepFace = load_deepface()
 
 # -------------------------------------------------------------------
-# 3. Emotion Detector Class
+# 3️⃣ HELPER CLASSES
 # -------------------------------------------------------------------
 
 class EmotionDetector:
-    def __init__(self, deepface_model):
-        self.DeepFace = deepface_model
-        self.emotion_history = []
+    def __init__(self, model):
+        self.model = model
 
-    def detect_emotion_from_frame(self, frame):
-        """Detect emotion from a single frame"""
-        if self.DeepFace is None:
-            return None
-            
+    def detect(self, frame):
         try:
-            # Ensure frame is in correct format
-            if len(frame.shape) == 2:
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-            elif frame.shape[2] == 4:
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
-            
-            result = self.DeepFace.analyze(
-                frame,
-                actions=['emotion'],
-                enforce_detection=False,
-                silent=True
-            )
-            
-            if isinstance(result, list):
-                result = result[0]
-
-            emotions = result['emotion']
-            dominant_emotion = result['dominant_emotion']
-            confidence = emotions[dominant_emotion]
-
-            return {
-                'emotion': dominant_emotion,
-                'confidence': confidence / 100.0,
-                'all_emotions': {k: v/100.0 for k, v in emotions.items()},
-                'timestamp': datetime.now().isoformat()
-            }
-        except Exception as e:
-            return None
-
-# -------------------------------------------------------------------
-# 4. Mood Tracker Class
-# -------------------------------------------------------------------
-
-class MoodTracker:
-    def __init__(self, log_file='data/mood_history.csv'):
-        self.log_file = log_file
-        self.load_data()
-
-    def load_data(self):
-        if os.path.exists(self.log_file):
-            self.mood_data = pd.read_csv(self.log_file).to_dict('records')
-        else:
-            self.mood_data = []
-
-    def log_emotion(self, emotion_data, song_data=None):
-        log_entry = {
-            'timestamp': emotion_data['timestamp'],
-            'emotion': emotion_data['emotion'],
-            'confidence': emotion_data['confidence'],
-            'song_title': song_data['name'] if song_data else None,
-            'song_artist': song_data['artists'][0]['name'] if song_data else None,
-            'song_url': song_data['external_urls']['spotify'] if song_data else None
-        }
-        self.mood_data.append(log_entry)
-        pd.DataFrame(self.mood_data).to_csv(self.log_file, index=False)
-    
-    def get_mood_df(self):
-        return pd.DataFrame(self.mood_data)
-
-# -------------------------------------------------------------------
-# 5. Spotify Client Class
-# -------------------------------------------------------------------
+            result = self.model.analyze(frame, actions=["emotion"], enforce_detection=False, silent=True)
+            if isinstance(result, list): result = result[0]
+            dominant = result["dominant_emotion"]
+            return dominant, result["emotion"][dominant] / 100, result["emotion"]
+        except Exception:
+            return None, 0, {}
 
 class SpotifyClient:
     def __init__(self):
-        self.sp_oauth = SpotifyOAuth(
+        self.oauth = SpotifyOAuth(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             redirect_uri=REDIRECT_URI,
             scope=SCOPES,
             cache_path=None
         )
-        self.available_genres = None
 
     def get_auth_url(self):
-        return self.sp_oauth.get_authorize_url()
+        return self.oauth.get_authorize_url()
 
-    def get_token(self, auth_code):
+    def get_token(self, code):
+        return self.oauth.get_access_token(code, check_cache=False)
+
+    def get_client(self, token_info):
+        return spotipy.Spotify(auth=token_info["access_token"])
+
+    def recommend_by_mood(self, sp, emotion):
+        mood = SPOTIFY_MOOD_MAP.get(emotion, SPOTIFY_MOOD_MAP["neutral"])
         try:
-            token_info = self.sp_oauth.get_access_token(auth_code, check_cache=False)
-            return token_info
-        except Exception as e:
-            st.error(f"Error getting Spotify token: {e}")
-            return None
+            recs = sp.recommendations(
+                seed_genres=mood["genres"],
+                limit=10,
+                target_valence=mood["valence"],
+                target_energy=mood["energy"]
+            )
+            if recs and recs.get("tracks"):
+                return recs["tracks"]
+        except Exception:
+            pass
+        # Fallback: search
+        query = random.choice(mood["genres"])
+        results = sp.search(q=query, type="track", limit=10)
+        return results.get("tracks", {}).get("items", [])
 
-    def get_spotify_client(self, token_info):
-        return spotipy.Spotify(auth=token_info['access_token'])
-    
-    def load_available_genres(self, sp):
-        """Load available genres from Spotify API"""
-        if self.available_genres is None:
-            try:
-                response = sp.recommendation_genre_seeds()
-                self.available_genres = response.get('genres', [])
-            except:
-                # Fallback to common genres if API fails
-                self.available_genres = [
-                    'pop', 'rock', 'hip-hop', 'jazz', 'classical', 'electronic',
-                    'dance', 'metal', 'indie', 'acoustic', 'blues', 'chill',
-                    'ambient', 'soul', 'sad', 'happy', 'party', 'piano',
-                    'hard-rock', 'edm', 'sleep'
-                ]
-        return self.available_genres
-
-    def get_recommendations_for_emotion(self, sp, emotion):
-        """Get song recommendations based on detected emotion"""
-        if emotion not in SPOTIFY_MOOD_MAP:
-            emotion = 'neutral'
-        
-        try:
-            # Strategy 1: Use user's top tracks as seeds (most reliable)
-            st.info(f"Finding {emotion} music for you...")
-            
-            top_tracks = sp.current_user_top_tracks(limit=5, time_range='medium_term')
-            
-            if top_tracks and top_tracks.get('items'):
-                track_ids = [track['id'] for track in top_tracks['items'][:5]]
-                
-                params = SPOTIFY_MOOD_MAP[emotion]
-                rec_params = {
-                    'seed_tracks': track_ids,
-                    'limit': 10
-                }
-                
-                # Add target values instead of min/max
-                if 'min_valence' in params:
-                    rec_params['target_valence'] = params['min_valence']
-                elif 'max_valence' in params:
-                    rec_params['target_valence'] = params['max_valence']
-                    
-                if 'min_energy' in params:
-                    rec_params['target_energy'] = params['min_energy']
-                elif 'max_energy' in params:
-                    rec_params['target_energy'] = params['max_energy']
-                
-                recs = sp.recommendations(**rec_params)
-                
-                if recs and recs.get('tracks'):
-                    st.success(f"Found {len(recs['tracks'])} songs!")
-                    return recs['tracks']
-            
-            # Strategy 2: Use top artists as seeds
-            st.info("Trying alternative search method...")
-            top_artists = sp.current_user_top_artists(limit=5, time_range='medium_term')
-            
-            if top_artists and top_artists.get('items'):
-                artist_ids = [artist['id'] for artist in top_artists['items'][:5]]
-                
-                recs = sp.recommendations(seed_artists=artist_ids, limit=10)
-                
-                if recs and recs.get('tracks'):
-                    return recs['tracks']
-            
-            # Strategy 3: Use popular tracks from a specific genre-related artist
-            st.info("Searching popular tracks...")
-            # Mood-based artist search
-            mood_search_terms = {
-                'happy': 'happy pop',
-                'sad': 'sad acoustic',
-                'angry': 'rock metal',
-                'fear': 'ambient',
-                'surprise': 'electronic dance',
-                'disgust': 'jazz',
-                'neutral': 'indie pop'
-            }
-            
-            search_term = mood_search_terms.get(emotion, 'pop')
-            search_results = sp.search(q=search_term, type='track', limit=10)
-            
-            if search_results and search_results.get('tracks', {}).get('items'):
-                return search_results['tracks']['items']
-                
-        except Exception as e:
-            st.error(f"Error getting recommendations: {str(e)}")
-        
-        return None
-
-    def play_track(self, sp, track_uri):
+    def play_track(self, sp, uri):
         try:
             devices = sp.devices()
-            if not devices['devices']:
-                st.warning("No active Spotify device found. Please open Spotify and start playing.")
+            if not devices["devices"]:
+                st.warning("⚠️ No active Spotify device found. Open Spotify and play something once.")
                 return False
-            
-            sp.start_playback(uris=[track_uri])
+            sp.start_playback(uris=[uri])
             return True
-        except spotipy.exceptions.SpotifyException as e:
-            if "NO_ACTIVE_DEVICE" in str(e):
-                st.warning("No active Spotify device. Please open Spotify and try again.")
-            else:
-                st.error(f"Spotify error: {e}")
+        except Exception as e:
+            st.warning(f"Could not play automatically: {e}")
             return False
 
 # -------------------------------------------------------------------
-# 6. Session State Initialization
+# 4️⃣ SESSION STATE INIT
 # -------------------------------------------------------------------
-
-def initialize_session_state():
-    """Initialize all necessary keys in Streamlit's session state."""
-    defaults = {
-        'auth_code': None,
-        'token_info': None,
-        'sp_client': None,
-        'spotify_auth': SpotifyClient(),
-        'deepface_model': None,
-        'emotion_detector': None,
-        'mood_tracker': MoodTracker(),
-        'current_emotion': "neutral",
-        'last_emotion_change': time.time(),
-        'current_song': None,
-        'detecting': False,
-        'last_detection_time': 0
-    }
-    
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+if "spotify_client" not in st.session_state:
+    st.session_state.spotify_auth = SpotifyClient()
+    st.session_state.spotify_client = None
+    st.session_state.token_info = None
+    st.session_state.current_emotion = "neutral"
+    st.session_state.current_song = None
+    st.session_state.detector = EmotionDetector(DeepFace)
 
 # -------------------------------------------------------------------
-# 7. Spotify Authentication Handler
+# 5️⃣ AUTH HANDLER
 # -------------------------------------------------------------------
+query_params = st.experimental_get_query_params()
+if "code" in query_params and not st.session_state.token_info:
+    code = query_params["code"][0]
+    st.experimental_set_query_params()  # clear
+    token_info = st.session_state.spotify_auth.get_token(code)
+    if token_info:
+        st.session_state.token_info = token_info
+        st.session_state.spotify_client = st.session_state.spotify_auth.get_client(token_info)
+        st.rerun()
 
-def handle_spotify_auth():
-    """Manages the Spotify OAuth login and token retrieval."""
-    
-    query_params = st.query_params
-    if "code" in query_params and not st.session_state.token_info:
-        st.session_state.auth_code = query_params["code"]
-        st.query_params.clear()
-
-        token_info = st.session_state.spotify_auth.get_token(st.session_state.auth_code)
-        if token_info:
-            st.session_state.token_info = token_info
-            st.session_state.sp_client = st.session_state.spotify_auth.get_spotify_client(token_info)
-            st.rerun()
-
-    if not st.session_state.sp_client:
-        st.header("🎵 Login to Spotify to Begin")
-        st.write("This app will detect your emotions and play music that matches your mood!")
-        auth_url = st.session_state.spotify_auth.get_auth_url()
-        st.link_button("🔐 Login with Spotify", auth_url)
-        st.stop()
-    else:
-        st.success("✅ Logged in to Spotify!")
+if not st.session_state.spotify_client:
+    st.header("🎵 Login to Spotify")
+    st.write("Authorize the app to control playback and get music recommendations.")
+    auth_url = st.session_state.spotify_auth.get_auth_url()
+    st.link_button("🔐 Login with Spotify", auth_url)
+    st.stop()
+else:
+    st.success("✅ Logged in to Spotify!")
 
 # -------------------------------------------------------------------
-# 8. Music Update Logic
+# 6️⃣ MAIN APP LOGIC
 # -------------------------------------------------------------------
+st.header(f"Your Current Mood: {EMOJI_MAP[st.session_state.current_emotion]} {st.session_state.current_emotion.capitalize()}")
 
-def update_music_for_emotion(emotion):
-    """Update Spotify playback based on detected emotion"""
-    try:
-        sp = st.session_state.sp_client
-        if not sp:
-            return
+col1, col2 = st.columns([1, 1])
 
-        with st.spinner(f"Finding {emotion} music..."):
-            tracks = st.session_state.spotify_auth.get_recommendations_for_emotion(sp, emotion)
-        
-        if tracks:
-            selected_track = random.choice(tracks)
-            track_uri = selected_track['uri']
-            
-            # Try to play the track
-            success = st.session_state.spotify_auth.play_track(sp, track_uri)
-            
-            # Store the song regardless of playback success (for display)
-            st.session_state.current_song = selected_track
-            
-            if success:
-                st.success(f"🎵 Now playing: {selected_track['name']} by {selected_track['artists'][0]['name']}")
+with col1:
+    st.subheader("📸 Detect Your Emotion")
+    camera_photo = st.camera_input("Take a photo to analyze your mood")
+
+    if camera_photo:
+        img = Image.open(camera_photo)
+        frame = np.array(img)
+        emo, conf, all_scores = st.session_state.detector.detect(frame)
+
+        if emo:
+            st.write(f"**Detected Emotion:** {EMOJI_MAP[emo]} {emo.capitalize()} ({conf:.0%} confidence)")
+            st.session_state.current_emotion = emo
+
+            with st.expander("See all emotions"):
+                for e, s in all_scores.items():
+                    st.write(f"{e.capitalize()}: {s:.1f}%")
+
+            sp = st.session_state.spotify_client
+            tracks = st.session_state.spotify_auth.recommend_by_mood(sp, emo)
+            if tracks:
+                song = random.choice(tracks)
+                st.session_state.current_song = song
+                st.image(song["album"]["images"][0]["url"], use_container_width=True)
+                st.write(f"**{song['name']}** by {song['artists'][0]['name']}")
+                st.link_button("🎧 Open in Spotify", song["external_urls"]["spotify"])
+                st.session_state.spotify_auth.play_track(sp, song["uri"])
             else:
-                st.info(f"💿 Song selected: {selected_track['name']} by {selected_track['artists'][0]['name']}")
-                st.warning("⚠️ Could not play automatically. Please open Spotify on any device and press play!")
+                st.warning("No tracks found for this mood.")
         else:
-            st.warning("Could not get song recommendations. Please try again.")
-                
-    except Exception as e:
-        st.error(f"Error updating music: {e}")
+            st.warning("😕 Could not detect emotion. Try again with better lighting.")
 
-# -------------------------------------------------------------------
-# 9. Main App Logic
-# -------------------------------------------------------------------
-
-def main_app():
-    """Runs the main application logic after login."""
-    
-    st.header(f"Current Mood: {EMOJI_MAP.get(st.session_state.current_emotion, '😐')} {st.session_state.current_emotion.capitalize()}")
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("📸 Emotion Detection")
-        
-        # Camera input
-        camera_photo = st.camera_input("Take a photo to detect your emotion")
-        
-        if camera_photo is not None:
-            # Load the image
-            image = Image.open(camera_photo)
-            img_array = np.array(image)
-            
-            # Convert to BGR for OpenCV
-            if len(img_array.shape) == 3 and img_array.shape[2] == 3:
-                img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-            else:
-                img_bgr = img_array
-            
-            # Detect emotion
-            current_time = time.time()
-            if current_time - st.session_state.last_detection_time > 3:  # Rate limit
-                st.session_state.last_detection_time = current_time
-                
-                with st.spinner("Analyzing your emotion..."):
-                    emotion_data = st.session_state.emotion_detector.detect_emotion_from_frame(img_bgr)
-                
-                if emotion_data and emotion_data['confidence'] > 0.5:
-                    detected_emotion = emotion_data['emotion']
-                    confidence = emotion_data['confidence']
-                    
-                    st.write(f"**Detected:** {EMOJI_MAP.get(detected_emotion, '😐')} {detected_emotion.capitalize()} ({confidence:.1%} confidence)")
-                    
-                    # Show all emotions
-                    with st.expander("See all emotion scores"):
-                        for emo, score in sorted(emotion_data['all_emotions'].items(), key=lambda x: x[1], reverse=True):
-                            col_emo, col_bar = st.columns([1, 3])
-                            with col_emo:
-                                st.write(f"**{emo.capitalize()}**")
-                            with col_bar:
-                                st.progress(float(score))  # Convert to Python float
-                                st.caption(f"{score:.1%}")
-                    
-                    # Update music if emotion changed significantly
-                    if detected_emotion != st.session_state.current_emotion:
-                        st.session_state.current_emotion = detected_emotion
-                        st.session_state.last_emotion_change = current_time
-                        
-                        # Update music first
-                        update_music_for_emotion(detected_emotion)
-                        
-                        # Log the emotion with the new song
-                        st.session_state.mood_tracker.log_emotion(emotion_data, st.session_state.current_song)
-                        
-                        st.rerun()
-                else:
-                    st.warning("Could not detect emotion clearly. Please try again with better lighting.")
-
-    with col2:
-        st.subheader("🎵 Now Playing")
-        
-        if st.session_state.current_song:
-            track = st.session_state.current_song
-            artist = track['artists'][0]['name']
-            title = track['name']
-            
-            if track['album']['images']:
-                image_url = track['album']['images'][0]['url']
-                st.image(image_url, width='stretch')
-            
-            st.write(f"**{title}**")
-            st.write(f"by {artist}")
-            
-            if 'external_urls' in track:
-                st.link_button("🎧 Open in Spotify", track['external_urls']['spotify'])
-        else:
-            st.info("No song playing yet. Take a photo to detect your mood!")
-            
-            # Add manual recommendation button
-            if st.button("🎲 Get Random Recommendations"):
-                update_music_for_emotion(st.session_state.current_emotion)
-                st.rerun()
-            
-            st.caption("💡 Make sure Spotify is open on one of your devices!")
-    
-    # Mood History Section
-    st.markdown("---")
-    st.subheader("📊 Mood History")
-    
-    df = st.session_state.mood_tracker.get_mood_df()
-    
-    if not df.empty:
-        col_data, col_chart = st.columns([2, 1])
-        
-        with col_data:
-            st.dataframe(df.tail(10), width='stretch')
-        
-        with col_chart:
-            if len(df) > 0:
-                emotion_counts = df['emotion'].value_counts()
-                fig, ax = plt.subplots(figsize=(6, 6))
-                colors = ['#1DB954', '#FF6B6B', '#FFA500', '#9B59B6', '#3498DB', '#E74C3C', '#95A5A6']
-                ax.pie(emotion_counts.values, labels=emotion_counts.index, autopct='%1.1f%%', colors=colors)
-                ax.set_title('Emotion Distribution')
-                st.pyplot(fig)
+with col2:
+    st.subheader("🎶 Now Playing")
+    if st.session_state.current_song:
+        song = st.session_state.current_song
+        st.image(song["album"]["images"][0]["url"], use_container_width=True)
+        st.write(f"**{song['name']}**")
+        st.write(f"by {song['artists'][0]['name']}")
+        st.link_button("🎧 Open in Spotify", song["external_urls"]["spotify"])
     else:
-        st.info("No mood data logged yet. Start detecting emotions to build your history!")
+        st.info("No song yet — take a photo to detect your mood!")
 
-# -------------------------------------------------------------------
-# 10. Main Execution
-# -------------------------------------------------------------------
-
-if __name__ == "__main__":
-    st.set_page_config(
-        page_title="Mood Music Player", 
-        layout="wide",
-        page_icon="🎵"
-    )
-    
-    st.title("🎵 Emotion-Based Spotify Player")
-    st.write("Let AI detect your mood and play the perfect music! 🎧")
-    
-    # Initialize session state
-    initialize_session_state()
-    
-    # Load DeepFace model
-    if st.session_state.deepface_model is None:
-        with st.spinner("Loading AI models... This may take a moment on first load."):
-            st.session_state.deepface_model = load_deepface()
-            if st.session_state.deepface_model:
-                st.session_state.emotion_detector = EmotionDetector(st.session_state.deepface_model)
-    
-    if st.session_state.deepface_model is None:
-        st.error("Failed to load emotion detection models. Please refresh the page.")
-        st.stop()
-    
-    # Run auth flow
-    handle_spotify_auth()
-    
-    # Run main app
-    main_app()
