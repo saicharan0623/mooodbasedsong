@@ -51,13 +51,14 @@ except (FileNotFoundError, KeyError) as e:
     st.stop()
 
 # Define the required scopes for Spotify
-SCOPES = "user-modify-playback-state user-read-playback-state user-read-currently-playing"
+SCOPES = "user-modify-playback-state user-read-playback-state user-read-currently-playing user-top-read"
 
 # Map emotions to Spotify audio features
+# Using only verified Spotify genres that are known to work
 SPOTIFY_MOOD_MAP = {
-    'happy': {'min_valence': 0.7, 'min_energy': 0.7, 'seed_genres': ['pop', 'dance', 'party']},
+    'happy': {'min_valence': 0.7, 'min_energy': 0.7, 'seed_genres': ['pop', 'dance', 'happy']},
     'sad': {'max_valence': 0.3, 'max_energy': 0.4, 'seed_genres': ['sad', 'acoustic', 'piano']},
-    'angry': {'max_valence': 0.4, 'min_energy': 0.8, 'seed_genres': ['metal', 'rock', 'hardstyle']},
+    'angry': {'max_valence': 0.4, 'min_energy': 0.8, 'seed_genres': ['metal', 'rock', 'hard-rock']},
     'fear': {'max_energy': 0.4, 'max_valence': 0.4, 'seed_genres': ['ambient', 'chill', 'sleep']},
     'surprise': {'min_energy': 0.7, 'min_valence': 0.6, 'seed_genres': ['pop', 'edm', 'party']},
     'disgust': {'max_energy': 0.3, 'seed_genres': ['jazz', 'soul', 'blues']},
@@ -181,6 +182,7 @@ class SpotifyClient:
             scope=SCOPES,
             cache_path=None
         )
+        self.available_genres = None
 
     def get_auth_url(self):
         return self.sp_oauth.get_authorize_url()
@@ -195,51 +197,75 @@ class SpotifyClient:
 
     def get_spotify_client(self, token_info):
         return spotipy.Spotify(auth=token_info['access_token'])
+    
+    def load_available_genres(self, sp):
+        """Load available genres from Spotify API"""
+        if self.available_genres is None:
+            try:
+                response = sp.recommendation_genre_seeds()
+                self.available_genres = response.get('genres', [])
+            except:
+                # Fallback to common genres if API fails
+                self.available_genres = [
+                    'pop', 'rock', 'hip-hop', 'jazz', 'classical', 'electronic',
+                    'dance', 'metal', 'indie', 'acoustic', 'blues', 'chill',
+                    'ambient', 'soul', 'sad', 'happy', 'party', 'piano',
+                    'hard-rock', 'edm', 'sleep'
+                ]
+        return self.available_genres
 
     def get_recommendations_for_emotion(self, sp, emotion):
         if emotion not in SPOTIFY_MOOD_MAP:
             emotion = 'neutral'
         
+        # Load available genres
+        available_genres = self.load_available_genres(sp)
+        
         params = SPOTIFY_MOOD_MAP[emotion]
         
         try:
-            # Get available genres to validate our seeds
-            available_genres = sp.recommendation_genre_seeds()['genres']
-            
             # Build recommendation parameters
-            rec_params = {
-                'limit': 10
-            }
+            rec_params = {'limit': 10}
             
-            # Add seed genres (max 5) - make sure they're in the list format
-            genres = params.get('seed_genres', [])[:5]
-            # Filter to only use available genres
-            valid_genres = [g for g in genres if g in available_genres]
+            # Filter seed genres to only valid ones
+            requested_genres = params.get('seed_genres', ['pop'])[:5]
+            valid_genres = [g for g in requested_genres if g in available_genres]
             
-            if valid_genres:
-                rec_params['seed_genres'] = valid_genres
-            else:
-                # Fallback to popular genres if none are valid
-                rec_params['seed_genres'] = ['pop', 'rock']
+            # Ensure we have at least one genre
+            if not valid_genres:
+                valid_genres = ['pop'] if 'pop' in available_genres else [available_genres[0]]
+            
+            rec_params['seed_genres'] = valid_genres
             
             # Add audio feature filters
-            if 'min_valence' in params:
+            if 'min_valence' in params and params['min_valence'] is not None:
                 rec_params['min_valence'] = params['min_valence']
-            if 'max_valence' in params:
+            if 'max_valence' in params and params['max_valence'] is not None:
                 rec_params['max_valence'] = params['max_valence']
-            if 'min_energy' in params:
+            if 'min_energy' in params and params['min_energy'] is not None:
                 rec_params['min_energy'] = params['min_energy']
-            if 'max_energy' in params:
+            if 'max_energy' in params and params['max_energy'] is not None:
                 rec_params['max_energy'] = params['max_energy']
             
+            # Make the API call
             recs = sp.recommendations(**rec_params)
-            return recs['tracks']
-        except Exception as e:
-            st.warning(f"Could not get recommendations: {e}")
-            # Try a simpler request without genre filtering
-            try:
-                recs = sp.recommendations(seed_genres=['pop'], limit=10)
+            
+            if recs and 'tracks' in recs and len(recs['tracks']) > 0:
                 return recs['tracks']
+            else:
+                # Fallback: try with just one genre
+                recs = sp.recommendations(seed_genres=['pop'], limit=10)
+                return recs['tracks'] if recs else None
+                
+        except Exception as e:
+            st.error(f"Error getting recommendations: {str(e)}")
+            # Last resort fallback using user's top tracks
+            try:
+                top_tracks = sp.current_user_top_tracks(limit=5, time_range='short_term')
+                if top_tracks and top_tracks['items']:
+                    track_ids = [track['id'] for track in top_tracks['items'][:5]]
+                    recs = sp.recommendations(seed_tracks=track_ids, limit=10)
+                    return recs['tracks'] if recs else None
             except:
                 return None
 
