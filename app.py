@@ -359,7 +359,7 @@ def main_app():
                             with col_emo:
                                 st.write(f"**{emo.capitalize()}**")
                             with col_bar:
-                                st.progress(score)
+                                st.progress(float(score))  # Convert to Python float
                                 st.caption(f"{score:.1%}")
                     
                     # Update music if emotion changed significantly
