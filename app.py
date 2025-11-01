@@ -292,8 +292,7 @@ def main_app():
             
             song_placeholder.image(image_url, caption=f"{title} by {artist}")
         else:
-            song_placeholder.info("No song selected yet. Start the webcam to detect your
-             mood!")
+            song_placeholder.info("No song selected yet. Start the webcam to detect your mood!")
     
     # Mood Dashboard
     st.subheader("Mood History")
