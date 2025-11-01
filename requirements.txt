@@ -1,9 +1,11 @@
 streamlit
 spotipy
 deepface
-opencv-python-headless
+opencv-python-headless==4.9.0.80
+tensorflow==2.16.2
+keras==3.3.3
+tf-keras==2.16.0
 streamlit-webrtc
 matplotlib
-tf-keras
 av
 pandas
