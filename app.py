@@ -55,12 +55,12 @@ SCOPES = "user-modify-playback-state user-read-playback-state user-read-currentl
 
 # Map emotions to Spotify audio features
 SPOTIFY_MOOD_MAP = {
-    'happy': {'min_valence': 0.7, 'min_energy': 0.7, 'seed_genres': ['happy', 'dance', 'pop']},
-    'sad': {'max_valence': 0.3, 'max_energy': 0.4, 'seed_genres': ['sad', 'acoustic', 'blues']},
-    'angry': {'max_valence': 0.4, 'min_energy': 0.8, 'seed_genres': ['metal', 'rock', 'punk']},
-    'fear': {'max_energy': 0.4, 'max_valence': 0.4, 'seed_genres': ['ambient', 'classical', 'chill']},
-    'surprise': {'min_energy': 0.7, 'min_valence': 0.6, 'seed_genres': ['pop', 'electronic', 'party']},
-    'disgust': {'max_energy': 0.3, 'seed_genres': ['lo-fi', 'jazz', 'soul']},
+    'happy': {'min_valence': 0.7, 'min_energy': 0.7, 'seed_genres': ['pop', 'dance', 'party']},
+    'sad': {'max_valence': 0.3, 'max_energy': 0.4, 'seed_genres': ['sad', 'acoustic', 'piano']},
+    'angry': {'max_valence': 0.4, 'min_energy': 0.8, 'seed_genres': ['metal', 'rock', 'hardstyle']},
+    'fear': {'max_energy': 0.4, 'max_valence': 0.4, 'seed_genres': ['ambient', 'chill', 'sleep']},
+    'surprise': {'min_energy': 0.7, 'min_valence': 0.6, 'seed_genres': ['pop', 'edm', 'party']},
+    'disgust': {'max_energy': 0.3, 'seed_genres': ['jazz', 'soul', 'blues']},
     'neutral': {'min_valence': 0.4, 'max_valence': 0.6, 'seed_genres': ['indie', 'pop', 'chill']}
 }
 
@@ -203,14 +203,27 @@ class SpotifyClient:
         params = SPOTIFY_MOOD_MAP[emotion]
         
         try:
-            recs = sp.recommendations(
-                seed_genres=params.get('seed_genres'),
-                min_valence=params.get('min_valence'),
-                max_valence=params.get('max_valence'),
-                min_energy=params.get('min_energy'),
-                max_energy=params.get('max_energy'),
-                limit=10
-            )
+            # Build recommendation parameters
+            rec_params = {
+                'limit': 10
+            }
+            
+            # Add seed genres (max 5)
+            genres = params.get('seed_genres', [])[:5]
+            if genres:
+                rec_params['seed_genres'] = genres
+            
+            # Add audio feature filters
+            if 'min_valence' in params:
+                rec_params['min_valence'] = params['min_valence']
+            if 'max_valence' in params:
+                rec_params['max_valence'] = params['max_valence']
+            if 'min_energy' in params:
+                rec_params['min_energy'] = params['min_energy']
+            if 'max_energy' in params:
+                rec_params['max_energy'] = params['max_energy']
+            
+            recs = sp.recommendations(**rec_params)
             return recs['tracks']
         except Exception as e:
             st.warning(f"Could not get recommendations: {e}")
@@ -396,7 +409,7 @@ def main_app():
             
             if track['album']['images']:
                 image_url = track['album']['images'][0]['url']
-                st.image(image_url, use_container_width=True)
+                st.image(image_url, width='stretch')
             
             st.write(f"**{title}**")
             st.write(f"by {artist}")
