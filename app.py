@@ -27,7 +27,7 @@ SCOPES = "user-read-currently-playing user-read-playback-state user-top-read use
 
 SPOTIFY_MOOD_MAP = {
     "happy": {"energy": 0.8, "valence": 0.8, "genres": ["pop", "dance", "happy"]},
-    "sad": {"energy": 0.3, "valence": 0.2, "genres": ["acoustic", "piano", "sad"]},
+    'sad': {'min_valence': 0.7, 'min_energy': 0.7, 'seed_genres': ['happy', 'dance', 'pop']},
     "angry": {"energy": 0.9, "valence": 0.3, "genres": ["rock", "metal", "hard-rock"]},
     "fear": {"energy": 0.4, "valence": 0.3, "genres": ["ambient", "chill", "sleep"]},
     "surprise": {"energy": 0.7, "valence": 0.7, "genres": ["edm", "party", "pop"]},
